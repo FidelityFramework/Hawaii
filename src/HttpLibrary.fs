@@ -8,7 +8,6 @@ open System.Globalization
 open System.Collections.Generic
 open System.Text
 open System.Threading
-{taskLibrary}
 
 module Serializer =
     open System.Text.Json
@@ -20,10 +19,54 @@ module Serializer =
             .WithAllowOverride(true)
     let options =
         let o = JsonSerializerOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)
-        o.Converters.Add(JsonFSharpConverter(fsharpOptions))
+        // Options-level converters precede type attributes. Leave explicitly
+        // attributed schema converters to System.Text.Json's normal resolution.
+        let fallback = JsonFSharpConverter(fsharpOptions)
+        o.Converters.Add({ new JsonConverterFactory() with
+            override _.CanConvert(t) =
+                not (t.IsDefined(typeof<JsonConverterAttribute>, false)) && fallback.CanConvert(t)
+            override _.CreateConverter(t, options) = fallback.CreateConverter(t, options) })
         o
     let serialize<'t> (value: 't) = JsonSerializer.Serialize(value, options)
     let deserialize<'t> (content: string) = JsonSerializer.Deserialize<'t>(content, options)
+
+    let scalarText (value: JsonElement) =
+        match value.ValueKind with
+        | JsonValueKind.String -> value.GetString()
+        | JsonValueKind.Number | JsonValueKind.True | JsonValueKind.False -> value.GetRawText()
+        | JsonValueKind.Null -> ""
+        | _ -> invalidArg "value" "This parameter encoding requires scalar values"
+
+    let commaParameter value =
+        use document = JsonDocument.Parse(serialize value)
+        if document.RootElement.ValueKind = JsonValueKind.Array then
+            document.RootElement.EnumerateArray() |> Seq.map scalarText |> String.concat ","
+        else scalarText document.RootElement
+
+    let scalarParameter value =
+        use document = JsonDocument.Parse(serialize value)
+        if document.RootElement.ValueKind = JsonValueKind.Null then invalidArg "value" "A non-null scalar URL parameter is required"
+        scalarText document.RootElement
+
+    let formObject value =
+        use document = JsonDocument.Parse(serialize value)
+        if document.RootElement.ValueKind <> JsonValueKind.Object then invalidArg "value" "An object query parameter is required"
+        [ for field in document.RootElement.EnumerateObject() -> field.Name, scalarText field.Value ]
+
+    // An explicit compatibility encoding, not a general OpenAPI array rule.
+    // Repeated dotted keys do not retain array-element boundaries, and null
+    // has the same transport text as an empty string.
+    let dottedParameters key value =
+        use document = JsonDocument.Parse(serialize value)
+        let rec flatten key (value: JsonElement) = [
+            match value.ValueKind with
+            | JsonValueKind.Array ->
+                for item in value.EnumerateArray() do yield! flatten key item
+            | JsonValueKind.Object ->
+                for field in value.EnumerateObject() do yield! flatten (key + "." + field.Name) field.Value
+            | _ -> yield key, scalarText value
+        ]
+        flatten key document.RootElement
 
 [<RequireQualifiedAccess>]
 type OpenApiValue =
@@ -35,20 +78,47 @@ type OpenApiValue =
     | Float of float32
     | List of OpenApiValue list
 
+/// A binary multipart value with its transport identity. PartName overrides
+/// the schema property name only when the caller explicitly supplies it.
+type MultipartFile = {
+    Bytes: byte[]
+    FileName: string
+    ContentType: string option
+    PartName: string option
+}
+
+/// A multipart string/binary alternative, with branch-specific media defaults.
+[<RequireQualifiedAccess>]
+type MultipartTextOrBinary =
+    | Text of string
+    | Binary of byte[]
+
 type MultiPartFormData =
     | Primitive of OpenApiValue
     | File of byte[]
+    | Files of MultipartFile list
+    | BinaryValues of byte[] list
+    | Json of string list
+    | Encoded of string * MultiPartFormData
 
 type RequestPart =
     | Query of string * OpenApiValue
+    | QueryPairs of (string * string) list
     | Path of string * OpenApiValue
     | Header of string * OpenApiValue
     | MultiPartFormData of string * MultiPartFormData
+    | MultipartBody
     | UrlEncodedFormData of string * OpenApiValue
+    | UrlEncodedBinary of string * byte[]
     | JsonContent of string
     | BinaryContent of byte[]
+    | RawContent of string * byte[]
     | Ignore
 
+    static member queryJson<'t>(key: string, value: 't) = Query(key, OpenApiValue.String(Serializer.serialize value))
+    static member queryComma<'t>(key: string, value: 't) = Query(key, OpenApiValue.String(Serializer.commaParameter value))
+    static member queryDotted<'t>(key: string, value: 't) = QueryPairs(Serializer.dottedParameters key value)
+    static member queryForm<'t>(key: string, value: 't) = QueryPairs(Serializer.formObject value)
     static member query(key: string, value: int) = Query(key, OpenApiValue.Int value)
     static member query(key: string, values: int list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.Int value ])
     static member query(key: string, value: int64) = Query(key, OpenApiValue.Int64 value)
@@ -72,6 +142,8 @@ type RequestPart =
     static member inline query< ^a when ^a : (member Format: unit -> string)>(key: string, value: ^a) : RequestPart =
         let format = (^a: (member Format: unit -> string) (value))
         Query(key, OpenApiValue.String format)
+    static member inline query< ^a when ^a : (member Format: unit -> string)>(key: string, values: ^a list) : RequestPart =
+        Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.String ((^a: (member Format: unit -> string) (value))) ])
     static member inline query< ^a when ^a : (member Format: unit -> string)>(key: string, value: ^a option) : RequestPart =
         match value with
         | None -> Ignore
@@ -85,12 +157,19 @@ type RequestPart =
 
     static member query(key: string, values: string list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.String value ])
     static member query(key: string, values: Guid list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.String (value.ToString()) ])
+    static member query(key: string, values: int64 list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.Int64 value ])
+    static member query(key: string, values: double list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.Double value ])
+    static member query(key: string, values: float32 list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.Float value ])
+    static member query(key: string, values: bool list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.Bool value ])
+    static member query(key: string, values: DateTimeOffset list) = Query(key, OpenApiValue.List [ for value in values -> OpenApiValue.String (value.ToString("O")) ])
+    static member query(key: string, value: System.Text.Json.Nodes.JsonNode) = Query(key, OpenApiValue.String(Serializer.scalarParameter value))
     static member query(key: string, value: bool) = Query(key, OpenApiValue.Bool value)
     static member query(key: string, value: double) = Query(key, OpenApiValue.Double value)
     static member query(key: string, value: float32) = Query(key, OpenApiValue.Float value)
     static member query(key: string, value: Guid) = Query(key, OpenApiValue.String (value.ToString()))
     static member query(key: string, value: DateTimeOffset) = Query(key, OpenApiValue.String (value.ToString("O")))
     static member path(key: string, value: int) = Path(key, OpenApiValue.Int value)
+    static member path(key: string, value: System.Text.Json.Nodes.JsonNode) = Path(key, OpenApiValue.String(Serializer.scalarParameter value))
     static member path(key: string, value: int64) = Path(key, OpenApiValue.Int64 value)
     static member path(key: string, value: string) = Path(key, OpenApiValue.String value)
     static member path(key: string, value: bool) = Path(key, OpenApiValue.Bool value)
@@ -111,6 +190,26 @@ type RequestPart =
         | Some instance ->
             let format = (^a: (member Format: unit -> string) (instance))
             Path(key, OpenApiValue.String format)
+    static member multipartTextOrBinary(key: string, value: MultipartTextOrBinary) =
+        match value with
+        | MultipartTextOrBinary.Text text -> MultiPartFormData(key, Primitive(OpenApiValue.String text))
+        | MultipartTextOrBinary.Binary bytes -> MultiPartFormData(key, File bytes)
+    static member multipartTextOrBinary(key: string, contentType: string, value: MultipartTextOrBinary) =
+        match value with
+        | MultipartTextOrBinary.Text text -> MultiPartFormData(key, Encoded(contentType, Primitive(OpenApiValue.String text)))
+        | MultipartTextOrBinary.Binary bytes -> MultiPartFormData(key, Encoded(contentType, File bytes))
+    static member multipartBinary(key: string, contentType: string, value: MultipartFile) =
+        MultiPartFormData(key, Encoded(contentType, Files [value]))
+    static member multipartBinary(key: string, contentType: string, values: MultipartFile list) =
+        MultiPartFormData(key, Encoded(contentType, Files values))
+    static member multipartJson<'t>(key: string, contentType: string, value: 't) =
+        MultiPartFormData(key, Encoded(contentType, Json [Serializer.serialize value]))
+    static member multipartJsonMany<'t>(key: string, contentType: string, values: 't list) =
+        MultiPartFormData(key, Encoded(contentType, Json (List.map Serializer.serialize values)))
+    static member multipartScalar<'t>(key: string, contentType: string, value: 't) =
+        MultiPartFormData(key, Encoded(contentType, Primitive(OpenApiValue.String(Serializer.scalarParameter value))))
+    static member multipartScalarMany<'t>(key: string, contentType: string, values: 't list) =
+        MultiPartFormData(key, Encoded(contentType, Primitive(OpenApiValue.List [ for value in values -> OpenApiValue.String(Serializer.scalarParameter value) ])))
     static member multipartFormData(key: string, value: int) =
         MultiPartFormData(key, Primitive(OpenApiValue.Int value))
     static member multipartFormData(key: string, value: int64) =
@@ -129,14 +228,18 @@ type RequestPart =
         MultiPartFormData(key, Primitive(OpenApiValue.String (value.ToString("O"))))
     static member multipartFormData(key: string, value: byte[]) =
         MultiPartFormData(key, File value)
-    // a structured (object/array/record) form-data field is sent as its JSON text;
-    // the concrete overloads above win for scalars, this catches everything else
+    static member multipartFormData(key: string, values: byte[] list) =
+        MultiPartFormData(key, BinaryValues values)
+    // Structured fields retain JSON encoding; binary lists have an exact overload.
     static member multipartFormData<'t>(key: string, value: 't) =
-        MultiPartFormData(key, Primitive(OpenApiValue.String(Serializer.serialize value)))
+        MultiPartFormData(key, Json [Serializer.serialize value])
     static member multipartFormData(key: string, values: string list) = MultiPartFormData(key, Primitive(OpenApiValue.List [ for value in values -> OpenApiValue.String value ]))
     static member multipartFormData(key: string, values: Guid list) = MultiPartFormData(key, Primitive(OpenApiValue.List [ for value in values -> OpenApiValue.String (value.ToString()) ]))
     static member multipartFormData(key: string, values: int list) = MultiPartFormData(key, Primitive(OpenApiValue.List [ for value in values -> OpenApiValue.Int value ]))
     static member multipartFormData(key: string, values: int64 list) = MultiPartFormData(key, Primitive(OpenApiValue.List [ for value in values -> OpenApiValue.Int64 value ]))
+    static member urlEncodedFormData(key: string, value: byte[]) = UrlEncodedBinary(key, value)
+    static member urlEncodedFormData(key: string, value: int) = UrlEncodedFormData(key, OpenApiValue.Int value)
+    static member urlEncodedFormData(key: string, value: int64) = UrlEncodedFormData(key, OpenApiValue.Int64 value)
     static member urlEncodedFormData(key: string, value: string) = UrlEncodedFormData(key, OpenApiValue.String value)
     static member urlEncodedFormData(key: string, value: bool) = UrlEncodedFormData(key, OpenApiValue.Bool value)
     static member urlEncodedFormData(key: string, value: double) = UrlEncodedFormData(key, OpenApiValue.Double value)
@@ -152,6 +255,13 @@ type RequestPart =
     static member header(key: string, value: Guid) = Header(key, OpenApiValue.String (value.ToString()))
     static member header(key: string, value: DateTimeOffset) = Header(key, OpenApiValue.String (value.ToString("O")))
     static member jsonContent<'t>(content: 't) = JsonContent(Serializer.serialize content)
+    static member rawContent(mediaType: string, content: byte[]) = RawContent(mediaType, content)
+    static member textContent(mediaType: string, content: string) =
+        let header = Headers.MediaTypeHeaderValue.Parse mediaType
+        let encoding = if String.IsNullOrEmpty header.CharSet then Encoding.UTF8 else Encoding.GetEncoding(header.CharSet.Trim('"'))
+        RawContent(mediaType, encoding.GetBytes(content))
+    static member jsonMediaContent<'t>(mediaType: string, content: 't) = RequestPart.textContent(mediaType, Serializer.serialize content)
+
     static member binaryContent(content: byte[]) = BinaryContent(content)
 
 module OpenApiHttp =
@@ -170,7 +280,12 @@ module OpenApiHttp =
     let applyPathParts (path: string) (parts: RequestPart list) =
         let applyPart (currentPath: string) (part: RequestPart) : string =
             match part with
-            | Path(key, value) -> currentPath.Replace("{" + key + "}", serializeValue value)
+            | Path(key, value) ->
+                let encoded =
+                    match value with
+                    | OpenApiValue.List values -> values |> List.map (serializeValue >> Uri.EscapeDataString) |> String.concat ","
+                    | scalar -> Uri.EscapeDataString(serializeValue scalar)
+                currentPath.Replace("{" + key + "}", encoded)
             | _ -> currentPath
 
         parts |> List.fold applyPart path
@@ -179,16 +294,18 @@ module OpenApiHttp =
         let cleanedPath = currentPath.TrimEnd '/'
         let queryParams =
             parts
-            |> List.choose (function
-                | Query(key, value) -> Some(key, value)
-                | _ -> None)
+            |> List.collect (function
+                | Query(key, OpenApiValue.List values) -> [ for value in values -> key, serializeValue value ]
+                | Query(key, value) -> [key, serializeValue value]
+                | QueryPairs pairs -> pairs
+                | _ -> [])
 
         if List.isEmpty queryParams then
             cleanedPath
         else
             let combinedParamters =
                 queryParams
-                |> List.map (fun (key, value) -> $"{key}={Uri.EscapeDataString(serializeValue value)}")
+                |> List.map (fun (key, value) -> $"{Uri.EscapeDataString(key)}={Uri.EscapeDataString(value)}")
                 |> String.concat "&"
 
             cleanedPath + "?" + combinedParamters
@@ -207,6 +324,10 @@ module OpenApiHttp =
             match part with
             | BinaryContent content ->
                 httpRequest.Content <- new ByteArrayContent(content)
+                httpRequest.Content.Headers.ContentType <- Headers.MediaTypeHeaderValue("application/octet-stream")
+            | RawContent(mediaType, content) ->
+                httpRequest.Content <- new ByteArrayContent(content)
+                httpRequest.Content.Headers.ContentType <- Headers.MediaTypeHeaderValue.Parse mediaType
             | _ -> ()
 
         httpRequest
@@ -246,36 +367,96 @@ module OpenApiHttp =
                 | _ -> None
             )
 
-        if formParts.IsEmpty then
+        let requiredBody = parts |> List.exists (function MultipartBody -> true | _ -> false)
+        if formParts.IsEmpty && not requiredBody then
             httpRequest
         else
-            let multipartFormData = new MultipartFormDataContent()
-            for (key, part) in formParts do
+            let boundary = Guid.NewGuid().ToString("N")
+            let multipartFormData = new MultipartFormDataContent(boundary)
+            let concreteMedia (allowed: string) (requested: string option) =
+                let choices = allowed.Split(',') |> Array.map (fun value -> value.Trim())
+                let matches (actual: string) (candidate: string) =
+                    let actual = actual.Split(';').[0].Trim()
+                    let candidate = candidate.Split(';').[0].Trim()
+                    candidate = "*/*" || actual.Equals(candidate, StringComparison.OrdinalIgnoreCase) ||
+                    (candidate.EndsWith("/*", StringComparison.Ordinal) && actual.StartsWith(candidate.Substring(0, candidate.Length - 1), StringComparison.OrdinalIgnoreCase))
+                let selected =
+                    match requested with
+                    | Some media -> media
+                    | None when choices.Length = 1 && not (choices.[0].Contains "*") -> choices.[0]
+                    | None when choices |> Array.exists (matches "application/octet-stream") -> "application/octet-stream"
+                    | None -> invalidArg "ContentType" "A multipart file must select one of the declared content types"
+                if selected.Contains "," || selected.Contains "*" || not (choices |> Array.exists (matches selected)) then
+                    invalidArg "ContentType" "The multipart file content type is not permitted by its encoding"
+                System.Net.Http.Headers.MediaTypeHeaderValue.Parse selected |> ignore
+                selected
+            let addText (key: string) (media: string) (text: string) =
+                let content = new StringContent(text, Encoding.UTF8)
+                content.Headers.ContentType <- System.Net.Http.Headers.MediaTypeHeaderValue.Parse media
+                multipartFormData.Add(content, key)
+            let rec add key media part =
                 match part with
-                | Primitive value ->
-                    let content = new StringContent(serializeValue value, Encoding.UTF8)
-                    content.Headers.Add("Content-Disposition", $"form-data; name=\"{key}\"")
+                | Encoded(contentType, value) -> add key (Some contentType) value
+                | Primitive(OpenApiValue.List values) ->
+                    for value in values do add key media (Primitive value)
+                | Primitive value -> addText key (defaultArg media "text/plain") (serializeValue value)
+                | Json values ->
+                    for value in values do addText key (defaultArg media "application/json") value
+                | File bytes ->
+                    let content = new ByteArrayContent(bytes)
+                    content.Headers.ContentType <- System.Net.Http.Headers.MediaTypeHeaderValue.Parse(defaultArg media "application/octet-stream")
                     multipartFormData.Add(content, key)
-                | File file ->
-                    let content = new ByteArrayContent(file)
-                    multipartFormData.Add(content, key)
+                | BinaryValues values ->
+                    for bytes in values do add key media (File bytes)
+                | Files values ->
+                    for file in values do
+                        if isNull file.Bytes then nullArg "Bytes"
+                        if String.IsNullOrWhiteSpace file.FileName then invalidArg "FileName" "A multipart filename is required"
+                        let name = defaultArg file.PartName key
+                        if String.IsNullOrWhiteSpace name then invalidArg "PartName" "A multipart part name must be nonempty"
+                        let contentType = concreteMedia (defaultArg media "application/octet-stream") file.ContentType
+                        let content = new ByteArrayContent(file.Bytes)
+                        content.Headers.ContentType <- System.Net.Http.Headers.MediaTypeHeaderValue.Parse contentType
+                        multipartFormData.Add(content, name, file.FileName)
+            for (key, part) in formParts do add key None part
 
-            httpRequest.Content <- multipartFormData
+            if multipartFormData |> Seq.isEmpty then
+                // The framework's empty container writes a nameless empty part.
+                // An empty form contains only its closing delimiter.
+                let content = new ByteArrayContent(Encoding.ASCII.GetBytes("--" + boundary + "--\r\n"))
+                content.Headers.ContentType <- multipartFormData.Headers.ContentType
+                multipartFormData.Dispose()
+                httpRequest.Content <- content
+            else
+                httpRequest.Content <- multipartFormData
             httpRequest
+
+    // Percent-encode the submitted octets directly. Binary form fields must
+    // not pass through UTF-8 decoding or acquire an invented base64 encoding.
+    let encodeFormOctets (bytes: byte[]) =
+        let result = StringBuilder()
+        for value in bytes do
+            if (value >= 65uy && value <= 90uy) || (value >= 97uy && value <= 122uy)
+               || (value >= 48uy && value <= 57uy) || value = 45uy || value = 46uy || value = 95uy || value = 126uy then
+                result.Append(char value) |> ignore
+            elif value = 32uy then result.Append('+') |> ignore
+            else result.Append('%').Append(value.ToString("X2", CultureInfo.InvariantCulture)) |> ignore
+        result.ToString()
 
     let applyUrlEncodedFormData (parts: RequestPart list) (httpRequest: HttpRequestMessage) =
         let formParts =
             parts
             |> List.choose (function
-                | UrlEncodedFormData(key, value) -> Some(key, value)
-                | _ -> None
-            )
-
-        if formParts.IsEmpty then
-            httpRequest
+                | UrlEncodedFormData(key, value) -> Some(key, Encoding.UTF8.GetBytes(serializeValue value))
+                | UrlEncodedBinary(key, value) -> Some(key, value)
+                | _ -> None)
+        if formParts.IsEmpty then httpRequest
         else
-            let contents = [ for (key, value) in formParts -> KeyValuePair(key, serializeValue value) ]
-            httpRequest.Content <- new FormUrlEncodedContent(contents)
+            let contents =
+                [ for key, value in formParts -> encodeFormOctets(Encoding.UTF8.GetBytes key) + "=" + encodeFormOctets value ]
+                |> String.concat "&"
+            httpRequest.Content <- new ByteArrayContent(Encoding.ASCII.GetBytes contents)
+            httpRequest.Content.Headers.ContentType <- Headers.MediaTypeHeaderValue("application/x-www-form-urlencoded")
             httpRequest
 
     let sendAsync (httpClient: HttpClient) (method: HttpMethod) (path: string) (parts: RequestPart list) {cancellationArgument} =
@@ -557,7 +738,6 @@ let library isTask projectName =
 
     content
         .Replace("{projectName}", projectName)
-        .Replace("{taskLibrary}", if isTask then "open FSharp.Control.Tasks" else "")
         .Replace("{asyncBuilder}", if isTask then "task" else "async")
         .Replace("{cancellationArgument}", "(cancellationToken: CancellationToken option)")
         .Replace("{cancellationParameter}", "cancellationToken")

@@ -4,12 +4,24 @@
 
 A dotnet CLI tool to generate type-safe F# and Fable clients from OpenAPI/Swagger/OData services.
 
-> **Unofficial fork.** This is an unofficial, modernized fork of [Hawaii](https://github.com/Zaid-Ajaj/Hawaii) by Zaid Ajaj, published as `Hawaii.Unofficial` while the changes are being upstreamed. It is not affiliated with or endorsed by the original author. The installed command is **`hawaii-unofficial`**.
->
-> **What's modernized:** runs on **.NET 10**; reads **OpenAPI 2.0, 3.0, 3.1 and 3.2** (via Microsoft.OpenApi 3.x); generated F# clients serialize with **System.Text.Json** (`FSharp.SystemTextJson`) and Fable clients with **Thoth.Json**; `oneOf` + `discriminator` schemas generate F# discriminated unions; added `OPTIONS`/`TRACE`/`QUERY` methods, opt-in response headers and streaming responses, and `TimeSpan` support.
+This branch builds on [Onur Gumus's modernization of Hawaii](https://github.com/OnurGumus/Hawaii/tree/modernization),
+which continues Zaid Ajaj's original project. The upstream base is commit
+`7899d3504ec2fa2e07e2790e02ef5829316cc1e6`, published as `Hawaii.Unofficial` 1.0.0.
+The `fsharp-cloudedge-support` branch adds generic schema, HTTP-contract, and
+shared-model client-group corrections used by FSharp.CloudEdge. Those local
+changes require a source build; installing the upstream NuGet package does not
+install this branch's additions.
+
+The generator runs on .NET 10 and uses OpenAPI.NET to read OpenAPI 2.0, 3.0,
+3.1, and 3.2 inputs. Generated .NET clients use System.Text.Json; the separate
+Fable target uses Thoth.Json. Reader support for a document version does not
+imply that every schema construct has a faithful generated representation.
+See the [branch contracts and explicit fidelity policy](docs/fsharp-cloudedge-support.md)
+[client groups with one shared model](docs/client-groups.md), and the
+[multipart request contract](docs/multipart-request-contract.md).
 
 ### Features
- - Supports any OpenApi/Swagger schema in form of JSON or Yaml, compatible with those that can be read by [OpenAPI.NET](https://github.com/microsoft/OpenAPI.NET)
+ - Reads JSON and YAML OpenAPI/Swagger inputs through [OpenAPI.NET](https://github.com/microsoft/OpenAPI.NET); unsupported representations produce diagnostics.
  - Supports [OData](https://www.odata.org) services (see example below), made possible by [OpenAPI.NET.OData](https://github.com/Microsoft/OpenAPI.NET.OData) which translates the OData model into an OpenApi document
  - Generates clients for F# on dotnet or for Fable in the browser
  - Automatically handles JSON deserialization into schema types
@@ -17,11 +29,30 @@ A dotnet CLI tool to generate type-safe F# and Fable clients from OpenAPI/Swagge
  - Generates discriminated union types to describe the possible responses of each endpoint
  - Generates full F# projects, including their required dependencies and targeting `netstandard2.0`
 
-### Install
+### Package and use this branch locally
 
+Build the tool package from this checkout, then install it into the consuming
+repository's local tool manifest. Choose a distinct local version; do not reuse
+a published version for different source.
+
+```sh
+# In the Hawaii checkout:
+dotnet pack src/Hawaii.fsproj -c Release -o /path/to/local-feed -p:Version="<local-version>"
+
+# In the consuming repository (create a manifest only if it has none):
+dotnet new tool-manifest
+dotnet tool install --local Hawaii.Unofficial --version "<local-version>" --source /path/to/local-feed
+dotnet tool run hawaii-unofficial -- --config /path/to/hawaii.json
 ```
-dotnet tool install -g Hawaii.Unofficial
-```
+
+FSharp.CloudEdge maintains its own bootstrap, feed, and pinned tool manifest.
+Its ordinary generation commands consume the installed tool, separately from
+this source checkout. The upstream published release is available as
+`Hawaii.Unofficial`; it does not include unpublished changes from this branch.
+
+For generator development and the regression harnesses below, build with
+`dotnet build src/Hawaii.fsproj`; those tests can also accept a frozen assembly
+through `--assembly`.
 
 ### Configuration
 
@@ -39,22 +70,32 @@ Create a configuration file called `hawaii.json` with the following shape:
     ["responseHeaders"]: <true | false>,
     ["streamingOperations"]: <list of operation ids>,
     ["overrideSchema"]: <JSON schema subset>,
-    ["filterTags"]: <list of tags>
+    ["filterTags"]: <list of tags>,
+    ["preserveJsonSchemas"]: <list of exact schema ids>,
+    ["clientGroups"]: <list of { "project": <name>, "operationIds": <list of ids> }>
 }
 ```
 Where
  - `<schema>` is a URL to the OpenApi/Swagger/OData location, whether that is an external URL or a relative file path. In case of OData services, the external URL has to end with `$metadata` which points to the Edm model of that service (see TripPinService example below) or it can be a local `.xml` file that contains the schema
  - `<project>` is the name of the project that will get generated
- - `<output>` is a relative path to the output directory where the project will be generated. (Note: this directory is deleted and re-generated when you run `hawaii-unofficial`)
+ - `<output>` is a relative path to the output directory where the project will be generated. (The output directory is replaced after schema validation and client rendering succeed; input diagnostics leave existing output intact.)
  - `<synchronous>` is an optional flag that determines whether hawaii should generate client methods that run http requests synchronously. This is useful when used inside console applications. (set to false by default)
  - `<target>` specifies whether hawaii should generate a client for F# on dotnet  (default) or a Fable client
  - `<asyncReturnType>` is an option to determine whether hawaii should generate client methods that return `Async<'T>` when set to "async" (default) or `Task<'T>` when set to "task" (this option is irrelevant when the `synchronous` option is set to `true`)
  - `<resolveReferences>` determines whether hawaii will attempt to resolve external references via schema pre-processing. This is set to `false` by default but sometimes an OpenApi schema is scattered into multiple schemas across a repository and this might help with the resolution.
- - `<emptyDefintions>` determines what hawaii should do when encountering a global type definition without schema information. When set to "ignore" (default) hawaii will generate the global type. However, sometimes these global types are still referenced from other types or definitions, in which case the setting this option to "free-form" will generate a type abbreviation for the empty schema equal to a free form object (`System.Text.Json.Nodes.JsonNode` when targetting F# or `obj` when targetting Fable)
+ - `<emptyDefintions>` determines what hawaii should do when encountering a global type definition without schema information. When set to "ignore" (default), Hawaii omits the empty global type; a remaining reference to a missing declaration is diagnosed. However, sometimes these global types are still referenced from other types or definitions, in which case the setting this option to "free-form" will generate a type abbreviation for the empty schema equal to a free form object (`System.Text.Json.Nodes.JsonNode` when targetting F# or `obj` when targetting Fable)
  - `<responseHeaders>` when set to `true`, every generated operation also returns the HTTP response headers as a `(string * string) list` alongside the response value. Defaults to `false`, leaving the generated client unchanged.
  - `<streamingOperations>` an optional list of operation ids whose binary (`application/octet-stream`) responses should be consumed as a `System.IO.Stream` instead of `byte[]` - useful for large downloads. Applies to the F# target only.
  - `<overrideSchema>` Allows you to override the resolved schema either to add more information (such as a missing operation ID) or _correct_ the types when you know better (see below)
  - `<filterTags>` Allows to filter which operations will be included based on their OpenAPI tags. Useful when generating the full schema isn't possible or isn't practical. To see what tags are available, use `hawaii-unofficial --show-tags`
+
+`preserveJsonSchemas` is a .NET-only, explicit opt-in for unresolved union and
+composed-union representations. Each listed source ID retains a distinct
+JSON-backed type and an entry in `schema-fidelity.json`; it does not gain a
+proof of union membership or intersection validity. The default is a diagnostic.
+`clientGroups` assigns every selected operation to exactly one client project
+while keeping schema and HTTP definitions in one shared project. See the linked
+contract documents for the complete rules and examples.
 
 ### Example ([PetStore](https://petstore3.swagger.io) Schema)
 Here is an example configuration for the pet store API:
@@ -207,9 +248,35 @@ You can go a step further by overriding the return types of certain responses. T
 }
 ```
 
-### Limitations
-These are the very early days of Hawaii as a tool to generate F# clients and there are some known limitations and rough edges that I will be working on:
- - `oneOf` + `discriminator` (with a `mapping`) generates an F# discriminated union. Plain `anyOf`/`oneOf` without a discriminator are only handled when they contain a single element, in which case it is reduced away.
+### Representation boundaries
+
+Disjoint JSON kinds and required, disjoint literal tags support typed union
+wire dispatch. A discriminator mapping alone does not establish exclusivity.
+Single-member compositions are simplified only when sibling constraints remain
+compatible. Other named unions, including intersections containing a union,
+require an explicit preservation policy or produce a diagnostic. The emitted
+converters are not complete JSON Schema validators.
+
+The .NET and Fable targets have separate runtime support. Shared client groups
+and preserved-JSON wrappers currently target .NET. Whole-provider generation,
+compilation, and outgoing-request checks remain consumer acceptance gates;
+no deployed Cloudflare behavior or complete provider coverage is implied by a
+successful narrow test. Cloudflare lifecycle and taxonomy policy stays in
+FSharp.CloudEdge, outside this generic generator.
+
+### Branch regression gates
+
+```sh
+python3 tests/response-contracts/run.py
+python3 tests/client-emission/run.py
+python3 tests/client-groups/run.py
+python3 tests/multipart-requests/run.py
+```
+
+These gates generate fresh clients, compile them in Debug and Release, and
+exercise their contracts through in-process HTTP handlers. They do not send
+requests to provider accounts. The historical integration harness below is
+separate from these focused branch regressions.
 
 > You can watch the live coding sessions as a playlist published on [YouTube here](https://www.youtube.com/watch?v=8dgjD6vG7yw&list=PLBzGkJMamtz0KCkK7OFnuXyXP7yUtnt9o)
 

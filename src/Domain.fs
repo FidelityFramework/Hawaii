@@ -26,6 +26,11 @@ type FactoryFunction =
     | Create
     | None
 
+type ClientGroup = {
+    project: string
+    operationIds: string list
+}
+
 type CodegenConfig = {
     schema: string
     output: string
@@ -45,10 +50,17 @@ type CodegenConfig = {
     /// When true, every generated operation also returns the HTTP response
     /// headers as `(string * string) list`. Default: false.
     responseHeaders: bool
+    /// Named union schemas whose JSON payload may be preserved without
+    /// asserting membership in one particular alternative. Default: none.
+    preserveJsonSchemas: string list
+    /// Optional clients with one shared model/HTTP project. Every selected
+    /// operation must belong to exactly one group. Default: a single project.
+    clientGroups: ClientGroup list
 }
 
 type OperationParameter = {
     parameterName: string
+    multipartEncoding: string option
     parameterIdent: string
     required: bool
     parameterType: SynType

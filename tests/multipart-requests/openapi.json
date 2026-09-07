@@ -1,0 +1,275 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Multipart Regression",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/upload": {
+      "post": {
+        "operationId": "Upload",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/UploadBase"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "metadata": {
+                        "type": "object",
+                        "properties": {
+                          "annotations": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "encoding": {
+                "files": {
+                  "contentType": "application/octet-stream, application/wasm"
+                },
+                "metadata": {
+                  "contentType": "application/json"
+                },
+                "single": {
+                  "contentType": "image/png"
+                }
+              }
+            },
+            "text/javascript": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          }
+        }
+      }
+    },
+    "/named": {
+      "post": {
+        "operationId": "Named",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "metadata"
+                ],
+                "properties": {
+                  "metadata": {
+                    "$ref": "#/components/schemas/NamedMetadata"
+                  }
+                }
+              },
+              "encoding": {
+                "metadata": {
+                  "contentType": "application/json"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          }
+        }
+      }
+    },
+    "/empty": {
+      "post": {
+        "operationId": "Empty",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "files": {
+                    "$ref": "#/components/schemas/BinaryFiles"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          }
+        }
+      }
+    },
+    "/union": {
+      "post": {
+        "operationId": "Union",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "value",
+                  "metadata"
+                ],
+                "properties": {
+                  "value": {
+                    "$ref": "#/components/schemas/TextOrBytes"
+                  },
+                  "metadata": {
+                    "$ref": "#/components/schemas/MetadataAlias"
+                  }
+                }
+              },
+              "encoding": {
+                "metadata": {
+                  "contentType": "application/json"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BinaryFile": {
+        "type": "string",
+        "format": "binary"
+      },
+      "BinaryFiles": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/BinaryFile"
+        }
+      },
+      "NamedMetadata": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "UploadBase": {
+        "type": "object",
+        "required": [
+          "metadata",
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "$ref": "#/components/schemas/BinaryFiles"
+          },
+          "metadata": {
+            "type": "object",
+            "required": [
+              "entry"
+            ],
+            "properties": {
+              "entry": {
+                "type": "string"
+              }
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "single": {
+            "$ref": "#/components/schemas/BinaryFile"
+          },
+          "metadataItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamedMetadata"
+            }
+          },
+          "untyped": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ArbitraryMetadata": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "object",
+            "additionalProperties": true
+          },
+          {
+            "type": "array",
+            "items": {}
+          }
+        ]
+      },
+      "MetadataAlias": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ArbitraryMetadata"
+          },
+          {
+            "description": "Canonical JSON payload alias."
+          }
+        ]
+      },
+      "TextOrBytes": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string",
+            "format": "binary"
+          }
+        ]
+      }
+    }
+  }
+}

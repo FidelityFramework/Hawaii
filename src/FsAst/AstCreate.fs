@@ -131,9 +131,9 @@ type SynExpr with
         let fields = fields |> List.map (fun (rfn, synExpr) -> SynExprRecordField(rfn, Some range.Zero, synExpr, None))
         SynExpr.Record(None, None, fields, range.Zero )
     static member CreateAsync(expr) =
-        SynExpr.App(ExprAtomicFlag.NonAtomic, false, SynExpr.CreateIdent(Ident.Create "async"), SynExpr.ComputationExpr(false, expr, range0), range0)
+        SynExpr.App(ExprAtomicFlag.NonAtomic, false, SynExpr.CreateLongIdent ["Microsoft"; "FSharp"; "Core"; "ExtraTopLevelOperators"; "async"], SynExpr.ComputationExpr(false, expr, range0), range0)
     static member CreateTask(expr) =
-        SynExpr.App(ExprAtomicFlag.NonAtomic, false, SynExpr.CreateIdent(Ident.Create "task"), SynExpr.ComputationExpr(false, expr, range0), range0)
+        SynExpr.App(ExprAtomicFlag.NonAtomic, false, SynExpr.CreateLongIdent ["Microsoft"; "FSharp"; "Control"; "TaskBuilder"; "task"], SynExpr.ComputationExpr(false, expr, range0), range0)
     static member  CreateReturn(expr) =
         SynExpr.YieldOrReturn((false, true), expr, range0)
     static member CreatePartialApp(name: string, exprs: SynExpr list) =

@@ -31,18 +31,17 @@ let sanitizeTypeName (typeName: string) =
     if String.IsNullOrWhiteSpace typeName then
         typeName
     else
-        // drop a generic-arity marker first (e.g. "KeyValuePair`2" -> "KeyValuePair")
-        let withoutArity =
-            if typeName.Contains "`" then
-                match typeName.Split '`' with
-                | [| name; _typeArgArity |] -> name
-                | _ -> typeName.Replace("`", "")
-            else
-                typeName
-        // then strip every separator character, regardless of order or combination
-        // (e.g. "workers-kv_key_name" -> "workerskvkeyname")
-        [ "."; "_"; "-"; "["; "]" ]
-        |> List.fold (fun (acc: string) separator -> acc.Replace(separator, "")) withoutArity
+        // Keep legal characters; encode separators instead of dropping their
+        // identity. The result is idempotent because generated names contain
+        // only identifier characters. Global allocation checks collisions with
+        // literal source names that happen to resemble an encoded spelling.
+        let encoded =
+            typeName
+            |> Seq.map (fun character ->
+                if Char.IsLetterOrDigit character || character = '_' then string character
+                else sprintf "_u%04X_" (int character))
+            |> String.concat ""
+        if Char.IsDigit encoded.[0] then "Type_" + encoded else encoded
 
 let invalidTitle (title: string) =
     String.IsNullOrWhiteSpace title
@@ -173,3 +172,19 @@ let isEmptySchema (schema: IOpenApiSchema) =
             && schema.AllOf.Count = 0
             && schema.AnyOf.Count = 0
             && (isNull schema.OneOf || schema.OneOf.Count = 0)
+
+/// Prefer ordinary JSON when offered; otherwise retain a structured JSON media
+/// key while sharing its codec. This lookup never rewrites the source document.
+let tryJsonMediaType (content: System.Collections.Generic.IDictionary<string, IOpenApiMediaType>) =
+    if isNull content then None
+    else
+        content.Keys
+        |> Seq.filter (fun key ->
+            let media = key.Split(';').[0].Trim()
+            media.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+            || media.EndsWith("+json", StringComparison.OrdinalIgnoreCase))
+        |> Seq.sortBy (fun key -> (if key = "application/json" then 0 else 1), key)
+        |> Seq.tryHead
+
+let hasJsonMediaType content = (tryJsonMediaType content).IsSome
+let jsonMedia (content: System.Collections.Generic.IDictionary<string, IOpenApiMediaType>) = content.[(tryJsonMediaType content).Value]

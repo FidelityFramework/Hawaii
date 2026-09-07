@@ -1,0 +1,1032 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Response status and body contracts",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/dispatch": {
+      "get": {
+        "operationId": "dispatch",
+        "responses": {
+          "200": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "message"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "message"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/empty": {
+      "get": {
+        "operationId": "empty",
+        "responses": {
+          "204": {
+            "description": "No response body"
+          }
+        }
+      }
+    },
+    "/exact": {
+      "get": {
+        "operationId": "exact",
+        "responses": {
+          "200": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "433": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/binary": {
+      "get": {
+        "operationId": "binary",
+        "responses": {
+          "200": {
+            "description": "Binary bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Declared response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "message"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tree": {
+      "get": {
+        "operationId": "tree",
+        "responses": {
+          "200": {
+            "description": "Recursive named array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tree"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/definition": {
+      "get": {
+        "operationId": "definition",
+        "responses": {
+          "200": {
+            "description": "Recursive allOf inline record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Definition"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/names": {
+      "get": {
+        "operationId": "names",
+        "responses": {
+          "200": {
+            "description": "Source names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Names"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/any-items": {
+      "get": {
+        "operationId": "anyItems",
+        "responses": {
+          "200": {
+            "description": "Unconstrained JSON array values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnyItems"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/preserved": {
+      "get": {
+        "operationId": "preserved",
+        "responses": {
+          "200": {
+            "description": "Explicit payload-preservation policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmbiguousPayload"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payload-box": {
+      "get": {
+        "operationId": "payloadBox",
+        "responses": {
+          "200": {
+            "description": "Explicit payload-preservation policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadBox"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payloads": {
+      "get": {
+        "operationId": "payloads",
+        "responses": {
+          "200": {
+            "description": "Explicit payload-preservation policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payloads"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/definitionAliases": {
+      "get": {
+        "operationId": "getDefinitionAliases",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionAliases"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/parameters/{id}": {
+      "get": {
+        "operationId": "parameters",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AmbiguousPayload"
+            }
+          },
+          {
+            "name": "values",
+            "in": "query",
+            "deprecated": true,
+            "schema": {
+              "$ref": "#/components/schemas/EnumValues"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "name": "dotted",
+            "in": "query",
+            "x-hawaii-query-encoding": "dotted-repeat",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "array",
+                    "items": {}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "name": "comma",
+            "in": "query",
+            "style": "form",
+            "explode": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "no content"
+          }
+        }
+      }
+    },
+    "/unconstrained/{identifier}": {
+      "get": {
+        "operationId": "unconstrainedParameters",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AnyIdentifier"
+            }
+          },
+          {
+            "name": "dates",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/DateRange"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "empty"
+          }
+        }
+      }
+    },
+    "/annotated/{id}": {
+      "get": {
+        "operationId": "annotatedParameters",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AnnotatedId"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AnnotatedTimestamp"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Checked"
+          }
+        }
+      }
+    },
+    "/scim": {
+      "post": {
+        "operationId": "scim",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagA"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "scim",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagA"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/vendor": {
+      "post": {
+        "operationId": "vendor",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.example+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagA"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "checked"
+          }
+        }
+      }
+    },
+    "/merge": {
+      "post": {
+        "operationId": "merge",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/TagA"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "checked"
+          }
+        }
+      }
+    },
+    "/sql": {
+      "post": {
+        "operationId": "sql",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "checked"
+          }
+        }
+      }
+    },
+    "/ndjson": {
+      "post": {
+        "operationId": "ndjson",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-ndjson": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "checked"
+          }
+        }
+      }
+    },
+    "/form": {
+      "post": {
+        "operationId": "form",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "count"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "integer"
+                  },
+                  "image": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "checked"
+          }
+        }
+      }
+    },
+    "/composed-body": {
+      "post": {
+        "operationId": "composedBody",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/TagA"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "extra"
+                    ],
+                    "properties": {
+                      "extra": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "checked"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Tree": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "legacy": {
+              "type": "string",
+              "deprecated": true
+            },
+            "children": {
+              "$ref": "#/components/schemas/Tree"
+            }
+          }
+        }
+      },
+      "Definition": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "element": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Definition"
+              }
+            ]
+          }
+        }
+      },
+      "a-b": {
+        "type": "object",
+        "required": [
+          "hyphen"
+        ],
+        "properties": {
+          "hyphen": {
+            "type": "string"
+          }
+        }
+      },
+      "a_b": {
+        "type": "object",
+        "required": [
+          "underscore"
+        ],
+        "properties": {
+          "underscore": {
+            "type": "integer"
+          }
+        }
+      },
+      "Names": {
+        "type": "object",
+        "required": [
+          "left",
+          "right",
+          "$metadata",
+          "content"
+        ],
+        "properties": {
+          "left": {
+            "$ref": "#/components/schemas/a-b"
+          },
+          "right": {
+            "$ref": "#/components/schemas/a_b"
+          },
+          "$metadata": {
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          "content": {
+            "type": "object",
+            "properties": {
+              "application/json": {
+                "type": "object",
+                "properties": {
+                  "*": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "AnyItems": {
+        "type": "array",
+        "items": {}
+      },
+      "AmbiguousPayload": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "left": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "right": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "PayloadBox": {
+        "type": "object",
+        "required": [
+          "payload"
+        ],
+        "properties": {
+          "payload": {
+            "$ref": "#/components/schemas/AmbiguousPayload"
+          }
+        }
+      },
+      "Payloads": {
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "DefinitionAliases": {
+        "type": "array",
+        "items": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/Definition"
+            },
+            {
+              "description": "annotation only",
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "TagA": {
+        "type": "object",
+        "required": [
+          "kind",
+          "value"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "a"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "TagB": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "b"
+            ]
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "Tagged": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TagA"
+          },
+          {
+            "$ref": "#/components/schemas/TagB"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "a": "#/components/schemas/TagA",
+            "b": "#/components/schemas/TagB"
+          }
+        }
+      },
+      "ByKind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          }
+        ]
+      },
+      "RecursiveValue": {
+        "oneOf": [
+          {
+            "type": "string",
+            "nullable": true
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RecursiveValue"
+            }
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecursiveValue"
+            }
+          }
+        ]
+      },
+      "InlineTagged": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TagA"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "extra": {
+                    "type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "inline"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "InlineArray": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ReservedEnums": {
+        "type": "string",
+        "enum": [
+          "summary",
+          "tags",
+          "a-b",
+          "a_b"
+        ]
+      },
+      "EnumValues": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "one",
+            "two"
+          ]
+        }
+      },
+      "AnyIdentifier": {
+        "example": "source-does-not-assert-string"
+      },
+      "DateRange": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          }
+        }
+      },
+      "TextId": {
+        "type": "string"
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "AnnotatedId": {
+        "allOf": [
+          {
+            "description": "read-only ID"
+          },
+          {
+            "readOnly": true
+          },
+          {
+            "$ref": "#/components/schemas/TextId"
+          }
+        ]
+      },
+      "AnnotatedTimestamp": {
+        "allOf": [
+          {
+            "description": "query start"
+          },
+          {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        ]
+      },
+      "ComposedUnion": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Tagged"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "position": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "position"
+            ]
+          }
+        ]
+      },
+      "ComposedAlias": {
+        "$ref": "#/components/schemas/ComposedUnion"
+      }
+    }
+  }
+}

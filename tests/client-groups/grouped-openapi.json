@@ -1,0 +1,25 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Shared model across clients", "version": "1.0.0"},
+  "paths": {
+    "/shared": {
+      "get": {
+        "operationId": "FetchShared",
+        "responses": {"200": {"description": "Shared payload", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}}
+      },
+      "post": {
+        "operationId": "SendShared",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}},
+        "responses": {"204": {"description": "Accepted"}}
+      }
+    },
+    "/legacy": {
+      "delete": {"operationId": "Legacy", "deprecated": true, "responses": {"204": {"description": "Accepted"}}}
+    }
+  },
+  "components": {
+    "schemas": {
+      "Shared": {"type": "object", "required": ["label"], "properties": {"label": {"type": "string"}}}
+    }
+  }
+}

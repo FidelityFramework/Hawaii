@@ -6,6 +6,8 @@ open FsAst
 open Fantomas.FCS.Syntax
 open Microsoft.OpenApi
 
+exception InvalidParameterEncoding of string
+
 let private paramReplace (parameter: string) (sep: char) : string =
     let parts = parameter.Split(sep)
     let firstPart = parts.[0]
@@ -101,11 +103,23 @@ let private processOperationParameters
     : OperationParameter option =
 
     if isNull (box parameter) ||
-       parameter.Deprecated ||
        not parameter.In.HasValue ||
-       isNull (box parameter.Schema)
+       (isNull (box parameter.Schema) && (isNull parameter.Content || parameter.Content.Count = 0))
     then None
     else
+        let queryEncoding =
+            if isNotNull parameter.Extensions && parameter.Extensions.ContainsKey "x-hawaii-query-encoding" then
+                match extensionString parameter.Extensions.["x-hawaii-query-encoding"] with
+                | Some encoding -> Some encoding
+                | None -> raise (InvalidParameterEncoding (sprintf "Query encoding must be a string for parameter %s" parameter.Name))
+            else None
+        match queryEncoding with
+        | Some "dotted-repeat" when target = Target.FSharp && parameter.In.Value = ParameterLocation.Query -> ()
+        | Some encoding -> raise (InvalidParameterEncoding (sprintf "Unsupported query encoding %s for parameter %s" encoding parameter.Name))
+        | None -> ()
+        let jsonQuery = parameter.In.Value = ParameterLocation.Query && isNotNull parameter.Content && parameter.Content.ContainsKey "application/json"
+        if jsonQuery && target <> Target.FSharp then
+            raise (InvalidParameterEncoding (sprintf "JSON query content currently requires the fsharp target: %s" parameter.Name))
         let shouldSpreadProperties =
             parameter.Style.HasValue
             && parameter.Style.Value = ParameterStyle.DeepObject
@@ -142,6 +156,7 @@ let private processOperationParameters
             |> Seq.exists (fun opParam -> opParam.parameterIdent = parameterIdentifier)
 
         Some {
+            multipartEncoding = None
             parameterName = parameter.Name
             parameterIdent =
                 if identifierAlreadyAdded
@@ -150,7 +165,12 @@ let private processOperationParameters
             required = parameter.Required || not nullable
             parameterType =  paramType
             docs = parameter.Description
-            location = (string parameter.In.Value).ToLower()
+            location =
+                if parameter.In.Value = ParameterLocation.Query && isNotNull parameter.Content && parameter.Content.ContainsKey "application/json" then "queryJson"
+                elif parameter.In.Value = ParameterLocation.Query && isNotNull parameter.Extensions && parameter.Extensions.ContainsKey "x-hawaii-query-encoding" && extensionString parameter.Extensions.["x-hawaii-query-encoding"] = Some "dotted-repeat" then "queryDotted"
+                elif target = Target.FSharp && parameter.In.Value = ParameterLocation.Query && parameter.Style = Nullable ParameterStyle.Form && not parameter.Explode then "queryComma"
+                elif target = Target.FSharp && parameter.In.Value = ParameterLocation.Query && schemaTypeName parameter.Schema = "object" && parameter.Style = Nullable ParameterStyle.Form then "queryForm"
+                else (string parameter.In.Value).ToLower()
             properties = properties
             style =
                 // a synthetic cancellation-token parameter must be detected before
@@ -159,6 +179,142 @@ let private processOperationParameters
                 elif parameter.Style.HasValue then (string parameter.Style).ToLower()
                 else "none"
         }
+
+// Walk only intersections: selecting a union branch would change the request contract.
+let rec private multipartSchemaParts (parents: IOpenApiSchema list) (schema: IOpenApiSchema) =
+    let recursive = parents |> List.exists (fun parent ->
+        obj.ReferenceEquals(parent, schema)
+        || (isSchemaReference schema && isSchemaReference parent && schemaReferenceId parent = schemaReferenceId schema))
+    if isNull (box schema) then []
+    elif recursive then
+        raise (InvalidParameterEncoding "Recursive multipart allOf schemas are not supported")
+    elif (isNotNull schema.OneOf && schema.OneOf.Count > 0) || (isNotNull schema.AnyOf && schema.AnyOf.Count > 0) then
+        raise (InvalidParameterEncoding "Multipart fields with alternative schemas are not supported")
+    else
+        schema :: [
+            if isNotNull schema.AllOf then
+                for child in schema.AllOf do
+                    yield! multipartSchemaParts (schema :: parents) child
+        ]
+
+let private multipartObjectProperties (schema: IOpenApiSchema) =
+    let parts = multipartSchemaParts [] schema
+    let fields = System.Collections.Generic.Dictionary<string, ResizeArray<IOpenApiSchema>>()
+    let required = System.Collections.Generic.HashSet<string>()
+    for part in parts do
+        let kind = schemaTypeName part
+        if kind <> "object" && not (String.IsNullOrEmpty kind) then
+            raise (InvalidParameterEncoding "Multipart request bodies require an object schema")
+        if isNotNull part.Properties then
+            for property in part.Properties do
+                if not (fields.ContainsKey property.Key) then fields.Add(property.Key, ResizeArray())
+                fields.[property.Key].Add property.Value
+        if isNotNull part.Required then
+            for name in part.Required do required.Add name |> ignore
+    if fields.Count = 0 then
+        raise (InvalidParameterEncoding "Multipart request bodies require declared properties")
+    fields |> Seq.map (fun field -> field.Key, List.ofSeq field.Value, required.Contains field.Key) |> Seq.toList
+
+let rec private multipartFieldType target (schemas: IOpenApiSchema list) =
+    let parts = schemas |> List.collect (multipartSchemaParts [])
+    let concrete = parts |> List.filter (fun schema -> not (String.IsNullOrEmpty (schemaTypeName schema)))
+    let kinds = concrete |> List.map schemaTypeName |> List.distinct
+    if kinds.Length > 1 then
+        raise (InvalidParameterEncoding "Conflicting multipart allOf property types")
+    let kind = kinds |> List.tryHead |> Option.defaultValue "object"
+    let primary = concrete |> List.tryHead |> Option.defaultWith (fun () -> List.head schemas)
+    let declaredType () =
+        if concrete.IsEmpty && not (schemas.Length = 1 && isSchemaReference schemas.Head) then
+            if target = Target.FSharp then
+                if parts |> List.exists (fun schema -> isNotNull schema.Properties && schema.Properties.Count > 0) then SynType.JObject()
+                else SynType.JToken()
+            else SynType.Object()
+        elif schemas.Length = 1 && (isSchemaReference schemas.Head || isNull schemas.Head.AllOf || schemas.Head.AllOf.Count = 0) then
+            readParamType target schemas.Head
+        elif kind = "object" then
+            if target = Target.FSharp then SynType.JObject() else SynType.Object()
+        else readParamType target primary
+    match kind with
+    | "file" | "string" when kind = "file" || (concrete |> List.exists (fun schema -> schema.Format = "binary")) ->
+        (if target = Target.FSharp then SynType.Create "MultipartFile" else SynType.Create "File"), "multipartBinary"
+    | "array" ->
+        let items = concrete |> List.choose (fun schema -> if isNull (box schema.Items) then None else Some schema.Items)
+        if items.IsEmpty then
+            (if target = Target.FSharp then SynType.JToken() else SynType.Object()) |> SynType.List, "multipartJsonMany"
+        else
+            let itemType, encoding = multipartFieldType target items
+            if encoding = "multipartBinary" then
+                if items |> List.collect (multipartSchemaParts []) |> List.exists (fun schema -> schemaTypeName schema = "array") then
+                    raise (InvalidParameterEncoding "Nested multipart binary arrays are not supported")
+                SynType.List itemType, encoding
+            else declaredType (), (if encoding = "multipartScalar" then "multipartScalarMany" else "multipartJsonMany")
+    | "object" -> declaredType (), "multipartJson"
+    | _ -> declaredType (), "multipartScalar"
+
+// These alternatives choose a multipart representation; they are not disjoint
+// JSON union cases. Keep the caller's text/bytes choice explicit.
+let private isMultipartTextOrBinary (schema: IOpenApiSchema) =
+    isNotNull (box schema)
+    && (isNull schema.OneOf || schema.OneOf.Count = 0)
+    && (isNull schema.AllOf || schema.AllOf.Count = 0)
+    && isNotNull schema.AnyOf && schema.AnyOf.Count = 2
+    && (schema.AnyOf |> Seq.forall (fun branch ->
+        schemaTypeName branch = "string"
+        && (isNull branch.AllOf || branch.AllOf.Count = 0)
+        && (isNull branch.AnyOf || branch.AnyOf.Count = 0)
+        && (isNull branch.OneOf || branch.OneOf.Count = 0)))
+    && (schema.AnyOf |> Seq.exists (fun branch -> String.IsNullOrEmpty branch.Format))
+    && (schema.AnyOf |> Seq.exists (fun branch -> branch.Format = "binary"))
+
+let private isJsonPartMedia (contentType: string) =
+    let mediaType = contentType.Split(';').[0].Trim()
+    mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+    || mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)
+
+let private multipartParameters (config: CodegenConfig) (media: IOpenApiMediaType) (parameters: OperationParameter seq) =
+    if config.target <> Target.FSharp && isNotNull (box media.Schema) && isNotNull media.Schema.AllOf && media.Schema.AllOf.Count > 0 then
+        raise (InvalidParameterEncoding "Composed multipart requests currently require the fsharp target")
+    multipartObjectProperties media.Schema
+    |> List.fold (fun (result: OperationParameter list) (name, schemas, required) ->
+        let encoding =
+            if isNotNull media.Encoding && media.Encoding.ContainsKey name then Some media.Encoding.[name]
+            else None
+        let explicitContentType =
+            encoding |> Option.bind (fun value -> if String.IsNullOrWhiteSpace value.ContentType then None else Some value.ContentType)
+        let parameterType, location =
+            if config.target = Target.FSharp && schemas.Length = 1 && isSchemaReference schemas.Head
+               && (explicitContentType |> Option.exists isJsonPartMedia) then
+                // A named JSON model has already passed declaration fidelity checks.
+                // Do not flatten its union or replace its canonical type with a string.
+                readParamType config.target schemas.Head, "multipartJson"
+            elif config.target = Target.FSharp && schemas.Length = 1 && isMultipartTextOrBinary schemas.Head then
+                SynType.Create "MultipartTextOrBinary", "multipartTextOrBinary"
+            else multipartFieldType config.target schemas
+        let contentType =
+            explicitContentType
+            |> Option.defaultValue (if location = "multipartBinary" then "application/octet-stream" elif location.StartsWith("multipartJson", StringComparison.Ordinal) then "application/json" else "text/plain")
+        if location <> "multipartBinary" && (contentType.Contains "," || contentType.Contains "*") then
+            raise (InvalidParameterEncoding (sprintf "Multipart field %s requires one concrete content type" name))
+        let jsonMedia = isJsonPartMedia contentType
+        if config.target = Target.FSharp && location.StartsWith("multipartJson", StringComparison.Ordinal) && not jsonMedia then
+            raise (InvalidParameterEncoding (sprintf "Structured multipart field %s requires a JSON content type, got %s" name contentType))
+        if encoding |> Option.exists (fun value -> isNotNull value.Headers && (value.Headers.Keys |> Seq.exists (fun name -> not (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))))) then
+            raise (InvalidParameterEncoding (sprintf "Multipart field %s declares unsupported custom part headers" name))
+        let identifier = cleanParamIdent name (Seq.append parameters result)
+        let alreadyAdded = Seq.append parameters result |> Seq.exists (fun parameter -> parameter.parameterIdent = identifier)
+        result @ [{
+            multipartEncoding =
+                if config.target <> Target.FSharp || (location = "multipartTextOrBinary" && explicitContentType.IsNone) then None
+                else Some contentType
+            parameterName = name
+            parameterIdent = if alreadyAdded then identifier + "InFormData" else identifier
+            required = required
+            parameterType = if config.target = Target.FSharp then parameterType else readParamType config.target schemas.Head
+            docs = schemas |> List.tryPick (fun schema -> if String.IsNullOrWhiteSpace schema.Description then None else Some schema.Description) |> Option.defaultValue ""
+            properties = []
+            location = if config.target = Target.FSharp then (if jsonMedia && location <> "multipartBinary" then (if location.EndsWith("Many", StringComparison.Ordinal) then "multipartJsonMany" else "multipartJson") else location) else "multipartFormData"
+            style = "formfield"
+        }]) []
 
 let private processOperationRequestBody
     (config: CodegenConfig)
@@ -169,9 +325,19 @@ let private processOperationRequestBody
     if isNull (box operation.RequestBody) then []
     else
         let content = operation.RequestBody.Content
+        let jsonKey = tryJsonMediaType content
+        let bodyIdent =
+            if isNotNull operation.RequestBody.Extensions && operation.RequestBody.Extensions.ContainsKey "x-bodyName" then
+                extensionString operation.RequestBody.Extensions.["x-bodyName"] |> Option.defaultValue "body"
+            else "body"
+        let jsonLocation =
+            match jsonKey with
+            | Some "application/json" | None -> "jsonContent"
+            | Some _ when config.target = Target.FSharp -> "jsonMediaContent"
+            | Some media -> raise (InvalidParameterEncoding (sprintf "Structured JSON media %s currently requires the fsharp target" media))
 
-        if content.ContainsKey "application/json" && not (isEmptySchema content.["application/json"].Schema) then
-            let schema = content.["application/json"].Schema
+        if (hasJsonMediaType content) && not (isEmptySchema (jsonMedia content).Schema) then
+            let schema = (jsonMedia content).Schema
             let typeName = "body"
             let parameterName =
                 if operation.RequestBody.Extensions.ContainsKey "x-bodyName" then
@@ -192,18 +358,19 @@ let private processOperationRequestBody
                     readParamType config.target schema
 
             [{
-                parameterName = parameterName
+                multipartEncoding = None
+                parameterName = if jsonLocation = "jsonContent" then parameterName else jsonKey.Value
                 parameterIdent = cleanParamIdent parameterName parameters
-                required = true
+                required = operation.RequestBody.Required
                 parameterType = requestTypePayload
                 docs = schema.Description
-                location = "jsonContent"
+                location = jsonLocation
                 style = "none"
                 properties = []
             }]
 
-        elif content.ContainsKey "application/json" && isEmptySchema content.["application/json"].Schema && config.emptyDefinitions = EmptyDefinitionResolution.GenerateFreeForm then
-            let schema = content.["application/json"].Schema
+        elif (hasJsonMediaType content) && isEmptySchema (jsonMedia content).Schema && config.emptyDefinitions = EmptyDefinitionResolution.GenerateFreeForm then
+            let schema = (jsonMedia content).Schema
             let typeName = "body"
             let parameterName =
                 if operation.RequestBody.Extensions.ContainsKey "x-bodyName" then
@@ -214,9 +381,10 @@ let private processOperationRequestBody
                     camelCase (normalizeFullCaps typeName)
 
             [{
-                parameterName = parameterName
+                multipartEncoding = None
+                parameterName = if jsonLocation = "jsonContent" then parameterName else jsonKey.Value
                 parameterIdent = cleanParamIdent parameterName parameters
-                required = true
+                required = operation.RequestBody.Required
                 parameterType =
                     if config.target = Target.FSharp
                     then SynType.JToken()
@@ -225,64 +393,23 @@ let private processOperationRequestBody
                     if isNotNull (box schema)
                     then schema.Description
                     else ""
-                location = "jsonContent"
+                location = jsonLocation
                 style = "none"
                 properties = []
             }]
 
-        elif content.ContainsKey "multipart/form-data" && isNotNull (box content.["multipart/form-data"].Schema) && schemaTypeName content.["multipart/form-data"].Schema = "object" then
-            content.["multipart/form-data"].Schema.Properties
-            |> Seq.map (fun property ->
-                let parameterIdentifier = cleanParamIdent property.Key parameters
-                let identifierAlreadyAdded =
-                    parameters
-                    |> Seq.exists (fun opParam -> opParam.parameterIdent = parameterIdentifier)
-
-                {
-                    parameterName = property.Key
-                    parameterIdent =
-                        if identifierAlreadyAdded
-                        then $"{parameterIdentifier}InFormData"
-                        else parameterIdentifier
-                    required = content.["multipart/form-data"].Schema.Required.Contains property.Key
-                    parameterType = readParamType config.target property.Value
-                    docs = property.Value.Description
-                    properties = []
-                    location = "multipartFormData"
-                    style = "formfield"
-                })
-            |> Seq.toList
-
-        elif content.ContainsKey "multipart/form-data" && isNotNull (box content.["multipart/form-data"].Schema) && schemaTypeName content.["multipart/form-data"].Schema = "file" then
-            let parameterName =
-                if operation.RequestBody.Extensions.ContainsKey "x-bodyName" then
-                    match extensionString operation.RequestBody.Extensions.["x-bodyName"] with
-                    | Some name -> name
-                    | None -> "body"
-                else
-                    "body"
-
-            [{
-                parameterName = parameterName
-                parameterIdent = cleanParamIdent parameterName parameters
-                required = true
-                parameterType =
-                    if config.target = Target.FSharp
-                    then SynType.ByteArray()
-                    else SynType.Create "File" // from Browser.Types
-                docs = ""
-                properties = []
-                location = "multipartFormData"
-                style = "formfield"
-            }]
+        elif content.ContainsKey "multipart/form-data" then
+            multipartParameters config content.["multipart/form-data"] parameters
 
         elif content.ContainsKey "application/x-www-form-urlencoded" then
             let schema = content.["application/x-www-form-urlencoded"].Schema
-            if isNull (box schema) || schemaTypeName schema = "object" then []
+            if isNull (box schema) || schemaTypeName schema <> "object" then
+                raise (InvalidParameterEncoding (sprintf "Form URL encoding requires an object schema for operation %s" operation.OperationId))
             else
                 schema.Properties
                 |> Seq.map (fun property ->
                     {
+                        multipartEncoding = None
                         parameterName = property.Key
                         parameterIdent = cleanParamIdent property.Key parameters
                         required = schema.Required.Contains property.Key
@@ -294,18 +421,30 @@ let private processOperationRequestBody
                     })
                 |> Seq.toList
 
-        elif content.ContainsKey "application/octet-stream" then
+        elif config.target = Target.FSharp && content.Count = 1 then
+            let media = Seq.head content.Keys
+            let schema = content.[media].Schema
+            let baseMedia = media.Split(';').[0].Trim()
+            let binary = baseMedia = "application/octet-stream" || (isNotNull (box schema) && schema.Format = "binary")
+            let text = baseMedia.StartsWith("text/", StringComparison.OrdinalIgnoreCase) && schemaTypeName schema = "string"
+            if not binary && not text then
+                raise (InvalidParameterEncoding (sprintf "Unsupported request body encoding %s for operation %s" media operation.OperationId))
             [{
-                parameterName = "requestBody"
-                parameterIdent = "requestBody"
-                required = false
-                parameterType = SynType.ByteArray()
-                docs = ""
-                location = "binaryContent"
-                style = "formfield"
+                multipartEncoding = None
+                parameterName = media
+                parameterIdent = cleanParamIdent bodyIdent parameters
+                required = operation.RequestBody.Required
+                parameterType = if binary then SynType.ByteArray() else SynType.String()
+                docs = if isNotNull (box schema) then schema.Description else ""
+                location = if binary then "rawContent" else "textContent"
+                style = "none"
                 properties = []
             }]
-        else []
+        elif content.ContainsKey "application/octet-stream" && config.target = Target.Fable then
+            [{ multipartEncoding = None; parameterName = "requestBody"; parameterIdent = "requestBody"; required = operation.RequestBody.Required
+               parameterType = SynType.ByteArray(); docs = ""; location = "binaryContent"; style = "formfield"; properties = [] }]
+        else
+            raise (InvalidParameterEncoding (sprintf "Unsupported request body media for operation %s: %s" operation.OperationId (String.concat ", " content.Keys)))
 
 let operationParameters
     (operation: OpenApiOperation)

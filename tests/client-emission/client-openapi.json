@@ -1,0 +1,28 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Client emission regression", "version": "1.0.0" },
+  "paths": {
+    "/jobs/{task}": { "get": {
+      "operationId": "FetchJob",
+      "parameters": [ { "name": "task", "in": "path", "required": true, "schema": { "type": "string" } } ],
+      "responses": { "204": { "description": "Found" } }
+    } },
+    "/async": { "get": {
+      "operationId": "FetchAsync",
+      "parameters": [ { "name": "async", "in": "query", "required": true, "schema": { "type": "string" } } ],
+      "responses": { "204": { "description": "Found" } }
+    } },
+    "/empty": { "get": {
+      "operationId": "Empty",
+      "responses": {
+        "204": { "description": "No content" },
+        "4XX": { "description": "Client failure without payload" },
+        "default": { "description": "Other response without payload" }
+      }
+    } },
+    "/legacy": { "get": {
+      "operationId": "Legacy", "deprecated": true,
+      "responses": { "204": { "description": "Still callable" } }
+    } }
+  }
+}
