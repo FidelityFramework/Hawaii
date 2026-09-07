@@ -15,9 +15,13 @@ The generated F# client sends requests to a real loopback HTTP listener. The lis
 - Exact binary bytes, filenames and per-file media types.
 - Repeated property names for file, scalar and structured arrays.
 - Explicit `PartName` overrides without changing `FileName`.
+- Effective-name collisions are rejected across owners, while repeated parts within an array remain valid.
+- Failed construction leaves caller-owned request content intact.
 - JSON metadata, inline refinements and additional JSON fields.
 - Canonical named metadata accepted as its generated record type.
 - Explicit text or binary values with branch-specific media and exact bytes.
+- Dynamic field names, unchanged base64 strings, concrete part media, and declared charset encoding.
+- Empty dynamic bodies and duplicate-name or wildcard-media refusal before HTTP transmission.
 - A preserved-JSON metadata alias retains canonical identity and unknown fields.
 - Omitted optional parts, an empty file list, and a required empty multipart body.
 - Legacy `byte[] list` helper calls produce binary parts rather than JSON.

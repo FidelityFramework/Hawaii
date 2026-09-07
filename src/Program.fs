@@ -2460,6 +2460,9 @@ let createOpenApiClient
                     if config.target = Target.FSharp && isNotNull (box operation.Value.RequestBody) && operation.Value.RequestBody.Required
                        && (parameters |> List.exists (fun parameter -> parameter.multipartEncoding.IsSome)) then
                         yield createIdent [ "RequestPart"; "MultipartBody" ]
+                    if config.target = Target.FSharp && (parameters |> List.exists (fun parameter -> parameter.location.StartsWith("multipart", StringComparison.Ordinal))) then
+                        let declared = parameters |> List.filter (fun parameter -> parameter.location.StartsWith("multipart", StringComparison.Ordinal) && parameter.location <> "multipartFields" && parameter.location <> "multipartFileFields")
+                        yield SynExpr.CreatePartialApp(["RequestPart"; "MultipartDeclaredFields"], [SynExpr.CreateList (declared |> List.map (fun parameter -> stringExpr parameter.parameterName))])
                     for parameter in parameters do
                         if parameter.required then
                             if parameter.properties.Length = 0 then

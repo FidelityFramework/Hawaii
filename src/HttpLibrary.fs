@@ -93,12 +93,28 @@ type MultipartTextOrBinary =
     | Text of string
     | Binary of byte[]
 
+/// A dynamically named multipart string value. Value is transmitted as supplied;
+/// a source contract requiring base64 text remains the caller's responsibility.
+type MultipartTextField = {
+    Name: string
+    Value: string
+    ContentType: string
+}
+
+/// One dynamically named array of binary parts.
+type MultipartFileField = {
+    Name: string
+    Files: MultipartFile list
+}
+
 type MultiPartFormData =
     | Primitive of OpenApiValue
     | File of byte[]
     | Files of MultipartFile list
     | BinaryValues of byte[] list
     | Json of string list
+    | TextFields of MultipartTextField list
+    | FileFields of MultipartFileField list
     | Encoded of string * MultiPartFormData
 
 type RequestPart =
@@ -108,6 +124,7 @@ type RequestPart =
     | Header of string * OpenApiValue
     | MultiPartFormData of string * MultiPartFormData
     | MultipartBody
+    | MultipartDeclaredFields of string list
     | UrlEncodedFormData of string * OpenApiValue
     | UrlEncodedBinary of string * byte[]
     | JsonContent of string
@@ -198,6 +215,10 @@ type RequestPart =
         match value with
         | MultipartTextOrBinary.Text text -> MultiPartFormData(key, Encoded(contentType, Primitive(OpenApiValue.String text)))
         | MultipartTextOrBinary.Binary bytes -> MultiPartFormData(key, Encoded(contentType, File bytes))
+    static member multipartFileFields(key: string, contentType: string, values: MultipartFileField list) =
+        MultiPartFormData(key, Encoded(contentType, FileFields values))
+    static member multipartFields(key: string, contentType: string, values: MultipartTextField list) =
+        MultiPartFormData(key, Encoded(contentType, TextFields values))
     static member multipartBinary(key: string, contentType: string, value: MultipartFile) =
         MultiPartFormData(key, Encoded(contentType, Files [value]))
     static member multipartBinary(key: string, contentType: string, values: MultipartFile list) =
@@ -373,63 +394,141 @@ module OpenApiHttp =
         else
             let boundary = Guid.NewGuid().ToString("N")
             let multipartFormData = new MultipartFormDataContent(boundary)
-            let concreteMedia (allowed: string) (requested: string option) =
-                let choices = allowed.Split(',') |> Array.map (fun value -> value.Trim())
-                let matches (actual: string) (candidate: string) =
-                    let actual = actual.Split(';').[0].Trim()
-                    let candidate = candidate.Split(';').[0].Trim()
-                    candidate = "*/*" || actual.Equals(candidate, StringComparison.OrdinalIgnoreCase) ||
-                    (candidate.EndsWith("/*", StringComparison.Ordinal) && actual.StartsWith(candidate.Substring(0, candidate.Length - 1), StringComparison.OrdinalIgnoreCase))
-                let selected =
-                    match requested with
-                    | Some media -> media
-                    | None when choices.Length = 1 && not (choices.[0].Contains "*") -> choices.[0]
-                    | None when choices |> Array.exists (matches "application/octet-stream") -> "application/octet-stream"
-                    | None -> invalidArg "ContentType" "A multipart file must select one of the declared content types"
-                if selected.Contains "," || selected.Contains "*" || not (choices |> Array.exists (matches selected)) then
-                    invalidArg "ContentType" "The multipart file content type is not permitted by its encoding"
-                System.Net.Http.Headers.MediaTypeHeaderValue.Parse selected |> ignore
-                selected
-            let addText (key: string) (media: string) (text: string) =
-                let content = new StringContent(text, Encoding.UTF8)
-                content.Headers.ContentType <- System.Net.Http.Headers.MediaTypeHeaderValue.Parse media
-                multipartFormData.Add(content, key)
-            let rec add key media part =
-                match part with
-                | Encoded(contentType, value) -> add key (Some contentType) value
-                | Primitive(OpenApiValue.List values) ->
-                    for value in values do add key media (Primitive value)
-                | Primitive value -> addText key (defaultArg media "text/plain") (serializeValue value)
-                | Json values ->
-                    for value in values do addText key (defaultArg media "application/json") value
-                | File bytes ->
-                    let content = new ByteArrayContent(bytes)
-                    content.Headers.ContentType <- System.Net.Http.Headers.MediaTypeHeaderValue.Parse(defaultArg media "application/octet-stream")
-                    multipartFormData.Add(content, key)
-                | BinaryValues values ->
-                    for bytes in values do add key media (File bytes)
-                | Files values ->
-                    for file in values do
-                        if isNull file.Bytes then nullArg "Bytes"
-                        if String.IsNullOrWhiteSpace file.FileName then invalidArg "FileName" "A multipart filename is required"
-                        let name = defaultArg file.PartName key
-                        if String.IsNullOrWhiteSpace name then invalidArg "PartName" "A multipart part name must be nonempty"
-                        let contentType = concreteMedia (defaultArg media "application/octet-stream") file.ContentType
-                        let content = new ByteArrayContent(file.Bytes)
-                        content.Headers.ContentType <- System.Net.Http.Headers.MediaTypeHeaderValue.Parse contentType
-                        multipartFormData.Add(content, name, file.FileName)
-            for (key, part) in formParts do add key None part
+            try
+                let concreteMedia (allowed: string) (requested: string option) =
+                    let choices = allowed.Split(',') |> Array.map (fun value -> value.Trim())
+                    let matches (actual: string) (candidate: string) =
+                        let actual = actual.Split(';').[0].Trim()
+                        let candidate = candidate.Split(';').[0].Trim()
+                        candidate = "*/*" || actual.Equals(candidate, StringComparison.OrdinalIgnoreCase) ||
+                        (candidate.EndsWith("/*", StringComparison.Ordinal) && actual.StartsWith(candidate.Substring(0, candidate.Length - 1), StringComparison.OrdinalIgnoreCase))
+                    let selected =
+                        match requested with
+                        | Some media -> media
+                        | None when choices.Length = 1 && not (choices.[0].Contains "*") -> choices.[0]
+                        | None when choices |> Array.exists (matches "application/octet-stream") -> "application/octet-stream"
+                        | None -> invalidArg "ContentType" "A multipart file must select one of the declared content types"
+                    if selected.Contains "," || selected.Contains "*" || not (choices |> Array.exists (matches selected)) then
+                        invalidArg "ContentType" "The multipart file content type is not permitted by its encoding"
+                    System.Net.Http.Headers.MediaTypeHeaderValue.Parse selected |> ignore
+                    selected
+                let disposition (name: string) (fileName: string option) =
+                    let header = System.Net.Http.Headers.ContentDispositionHeaderValue("form-data")
+                    if name |> Seq.exists (fun character -> int character > 127) then
+                        // Retain the framework's existing MIME convention for non-ASCII names.
+                        header.Name <- name
+                    else
+                        // Name's setter strips bounding quotes. Supply a validated quoted
+                        // parameter directly so literal quotes/backslashes retain identity.
+                        let quoted = "\"" + name.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
+                        header.Parameters.Add(System.Net.Http.Headers.NameValueHeaderValue("name", quoted))
+                    match fileName with
+                    | Some filename -> header.FileName <- filename; header.FileNameStar <- filename
+                    | None -> ()
+                    header
+                let wireOwnerName (name: string) =
+                    // This also detects a literal MIME-looking name colliding with a
+                    // framework-encoded non-ASCII name.
+                    if name.StartsWith("=?", StringComparison.Ordinal) then (disposition name None).Name
+                    else name
+                let addText (key: string) (media: string) (text: string) =
+                    let header = System.Net.Http.Headers.MediaTypeHeaderValue.Parse media
+                    let encoding =
+                        if String.IsNullOrWhiteSpace header.CharSet then Encoding.UTF8
+                        else Encoding.GetEncoding(header.CharSet.Trim('"'), EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)
+                    let content = new StringContent(text, encoding)
+                    content.Headers.ContentType <- header
+                    try
+                        content.Headers.ContentDisposition <- disposition key None
+                        multipartFormData.Add(content)
+                    with _ -> content.Dispose(); reraise()
+                let rec isDynamic = function
+                    | Encoded(_, value) -> isDynamic value
+                    | TextFields _ | FileFields _ -> true
+                    | _ -> false
+                let owners = System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal)
+                let claimName owner name =
+                    if String.IsNullOrWhiteSpace name then invalidArg "Name" "A multipart field name is required"
+                    let wireName = wireOwnerName name
+                    match owners.TryGetValue wireName with
+                    | true, existing when existing <> owner -> invalidArg "Name" "Multipart part name belongs to another field"
+                    | true, _ -> () // Repeated parts of one array keep their owner.
+                    | false, _ -> owners.Add(wireName, owner)
+                for part in parts do
+                    match part with
+                    | MultipartDeclaredFields declared -> for name in declared do claimName name name
+                    | _ -> ()
+                for key, value in formParts do
+                    if not (isDynamic value) then claimName key key
+                let reserveDynamicName name =
+                    if String.IsNullOrWhiteSpace name then invalidArg "Name" "A multipart field name is required"
+                    let wireName = wireOwnerName name
+                    if owners.ContainsKey wireName then invalidArg "Name" "Dynamic multipart object fields must have unique names distinct from declared fields"
+                    owners.Add(wireName, name)
+                let rec reserveDynamic = function
+                    | Encoded(_, value) -> reserveDynamic value
+                    | TextFields fields -> for field in fields do reserveDynamicName field.Name
+                    | FileFields fields -> for field in fields do reserveDynamicName field.Name
+                    | _ -> ()
+                for _, value in formParts do reserveDynamic value
+                let addContent (content: HttpContent) add =
+                    try add ()
+                    with _ -> content.Dispose(); reraise()
+                let rec add key media part =
+                    match part with
+                    | Encoded(contentType, value) -> add key (Some contentType) value
+                    | Primitive(OpenApiValue.List values) ->
+                        for value in values do add key media (Primitive value)
+                    | Primitive value -> addText key (defaultArg media "text/plain") (serializeValue value)
+                    | Json values ->
+                        for value in values do addText key (defaultArg media "application/json") value
+                    | File bytes ->
+                        let header = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(defaultArg media "application/octet-stream")
+                        let content = new ByteArrayContent(bytes)
+                        content.Headers.ContentType <- header
+                        addContent content (fun () ->
+                            content.Headers.ContentDisposition <- disposition key None
+                            multipartFormData.Add(content))
+                    | BinaryValues values ->
+                        for bytes in values do add key media (File bytes)
+                    | TextFields fields ->
+                        for field in fields do
+                            if isNull field.Value then nullArg "Value"
+                            if String.IsNullOrWhiteSpace field.ContentType then invalidArg "ContentType" "A concrete multipart field content type is required"
+                            let contentType = concreteMedia (defaultArg media "text/plain") (Some field.ContentType)
+                            addText field.Name contentType field.Value
+                    | FileFields fields ->
+                        for field in fields do
+                            if field.Files |> List.exists (fun file -> file.PartName |> Option.exists ((<>) field.Name)) then
+                                invalidArg "PartName" "A dynamic file must retain its owning field name"
+                            add field.Name media (Files field.Files)
+                    | Files values ->
+                        for file in values do
+                            if isNull file.Bytes then nullArg "Bytes"
+                            if String.IsNullOrWhiteSpace file.FileName then invalidArg "FileName" "A multipart filename is required"
+                            let name = defaultArg file.PartName key
+                            claimName key name
+                            let contentType = concreteMedia (defaultArg media "application/octet-stream") file.ContentType
+                            let content = new ByteArrayContent(file.Bytes)
+                            content.Headers.ContentType <- System.Net.Http.Headers.MediaTypeHeaderValue.Parse contentType
+                            addContent content (fun () ->
+                                content.Headers.ContentDisposition <- disposition name (Some file.FileName)
+                                multipartFormData.Add(content))
+                for (key, part) in formParts do add key None part
 
-            if multipartFormData |> Seq.isEmpty then
-                // The framework's empty container writes a nameless empty part.
-                // An empty form contains only its closing delimiter.
-                let content = new ByteArrayContent(Encoding.ASCII.GetBytes("--" + boundary + "--\r\n"))
-                content.Headers.ContentType <- multipartFormData.Headers.ContentType
+                if multipartFormData |> Seq.isEmpty then
+                    // The framework's empty container writes a nameless empty part.
+                    // An empty form contains only its closing delimiter.
+                    let content = new ByteArrayContent(Encoding.ASCII.GetBytes("--" + boundary + "--\r\n"))
+                    content.Headers.ContentType <- multipartFormData.Headers.ContentType
+                    multipartFormData.Dispose()
+                    httpRequest.Content <- content
+                else
+                    httpRequest.Content <- multipartFormData
+                httpRequest
+            with _ ->
                 multipartFormData.Dispose()
-                httpRequest.Content <- content
-            else
-                httpRequest.Content <- multipartFormData
-            httpRequest
+                reraise()
 
     // Percent-encode the submitted octets directly. Binary form fields must
     // not pass through UTF-8 decoding or acquire an invented base64 encoding.

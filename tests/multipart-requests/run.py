@@ -24,7 +24,7 @@ def run(command, work, log, expected=0):
 
 
 def assert_requests(requests):
-    assert len(requests) == 8, f"Expected eight HTTP requests, got {len(requests)}"
+    assert len(requests) == 12, f"Expected twelve HTTP requests, got {len(requests)}"
     binary = bytes([0, 255, 128, 65, 13, 10])
     wasm = bytes([0, 97, 115, 109, 255])
     first = requests[0]
@@ -66,6 +66,27 @@ def assert_requests(requests):
         metadata = next(part for part in request["parts"] if part["name"] == "metadata")
         assert metadata["media"] == "application/json"
         assert json.loads(metadata["bytes"]) == {"future": [True, 12, {"nested": "retained"}], "unknown": None}
+
+    dynamic = requests[8]
+    assert dynamic["path"] == "/dynamic"
+    import base64
+    assert [(part["name"], part["filename"], part["media"], part["bytes"]) for part in dynamic["parts"]] == [
+        ("hash_a", None, "application/wasm", base64.b64encode(binary)),
+        ("hash_b", None, "text/html", b"SGVsbG8g4rK7"),
+        ("hash_c", None, "application/null", b""),
+        ("unicode", None, "text/plain", "λ".encode("utf-16-le")),
+        ("same", None, "text/plain", b"unquoted"),
+        ('"same"', None, "text/plain", b"quoted"),
+        ("a\\b", None, "text/plain", b"backslash")]
+    assert requests[9] == {"path": "/dynamic", "parts": []}
+    mixed = requests[10]
+    assert mixed["path"] == "/mixed"
+    assert sorted((part["name"], part["filename"], part["bytes"]) for part in mixed["parts"] if part["filename"]) == [
+        ("extra", "extra.wasm", wasm), ("files", "main.js", binary)]
+    assert json.loads(next(part["bytes"] for part in mixed["parts"] if part["name"] == "metadata")) == {"label": "canonical"}
+
+    repeated = [part for part in requests[11]["parts"] if part["name"] == "same"]
+    assert [(part["filename"], part["bytes"]) for part in repeated] == [("first.bin", binary), ("second.wasm", wasm)]
 
 
 def main():
@@ -134,6 +155,15 @@ def main():
     output = run(["dotnet", str(assembly), "--config", str(config_path), "--no-logo"], ROOT, work / "conflicting.log", expected=1)
     assert "Conflicting multipart allOf property types" in output
     assert not (work / "Rejected").exists()
+    unsupported = json.loads((HERE / "openapi.json").read_text())
+    unsupported["paths"]["/dynamic"]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]["additionalProperties"] = {"type": "integer"}
+    unsupported_schema = work / "unsupported-dynamic.json"
+    unsupported_schema.write_text(json.dumps(unsupported))
+    config.update(schema=str(unsupported_schema), output=str(work / "UnsupportedDynamic"))
+    config_path.write_text(json.dumps(config))
+    output = run(["dotnet", str(assembly), "--config", str(config_path), "--no-logo"], ROOT, work / "unsupported-dynamic.log", expected=1)
+    assert "Dynamic multipart fields require string or binary-array additionalProperties" in output
+    assert not (work / "UnsupportedDynamic").exists()
     print(f"Multipart byte/name/media contracts and conflicting intersections verified. Logs: {work}")
 
 

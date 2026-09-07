@@ -211,6 +211,11 @@ let private multipartObjectProperties (schema: IOpenApiSchema) =
                 fields.[property.Key].Add property.Value
         if isNotNull part.Required then
             for name in part.Required do required.Add name |> ignore
+    // A required name need not appear in properties: additionalProperties
+    // still constrains its value. Expose it as a required typed parameter.
+    for name in required do
+        if not (fields.ContainsKey name) && isNotNull (box schema.AdditionalProperties) then
+            fields.Add(name, ResizeArray([schema.AdditionalProperties]))
     if fields.Count = 0 then
         raise (InvalidParameterEncoding "Multipart request bodies require declared properties")
     fields |> Seq.map (fun field -> field.Key, List.ofSeq field.Value, required.Contains field.Key) |> Seq.toList
@@ -316,6 +321,51 @@ let private multipartParameters (config: CodegenConfig) (media: IOpenApiMediaTyp
             style = "formfield"
         }]) []
 
+let private tryDynamicMultipartParameters (config: CodegenConfig) (media: IOpenApiMediaType) required bodyIdent parameters =
+    let schema = media.Schema
+    if isNull (box schema) || isNull (box schema.AdditionalProperties) then None
+    elif schemaTypeName schema <> "object" || (isNotNull schema.AllOf && schema.AllOf.Count > 0) then
+        raise (InvalidParameterEncoding "Multipart additional properties combined with intersections are not supported")
+    elif config.target <> Target.FSharp then
+        raise (InvalidParameterEncoding "Dynamic multipart fields currently require the fsharp target")
+    else
+        let item = schema.AdditionalProperties
+        let itemParts = multipartSchemaParts [] item
+        let binaryArray =
+            itemParts.Length = 1 && schemaTypeName item = "array"
+            && isNotNull (box item.Items) && schemaTypeName item.Items = "string" && item.Items.Format = "binary"
+        let plainString = itemParts.Length = 1 && schemaTypeName item = "string" && item.Format <> "binary"
+        if not plainString && not binaryArray then
+            raise (InvalidParameterEncoding "Dynamic multipart fields require string or binary-array additionalProperties")
+        let fixedParameters =
+            if (isNotNull schema.Properties && schema.Properties.Count > 0) || (isNotNull schema.Required && schema.Required.Count > 0) then
+                multipartParameters config media parameters
+            else []
+        let encoding =
+            if isNull media.Encoding || not (media.Encoding.ContainsKey "*") then None
+            else Some media.Encoding.["*"]
+        if isNotNull media.Encoding && (media.Encoding.Keys |> Seq.exists (fun key -> key <> "*" && not (fixedParameters |> List.exists (fun parameter -> parameter.parameterName = key)))) then
+            raise (InvalidParameterEncoding "Dynamic multipart encoding contains an unknown field selector")
+        if encoding |> Option.exists (fun value -> isNotNull value.Headers && value.Headers.Count > 0) then
+            raise (InvalidParameterEncoding "Custom headers on dynamic multipart fields are not supported")
+        let contentType =
+            encoding |> Option.bind (fun value -> if String.IsNullOrWhiteSpace value.ContentType then None else Some value.ContentType)
+            |> Option.defaultValue (if binaryArray then "application/octet-stream" else "text/plain")
+        let existing = Seq.append parameters fixedParameters
+        let identifier = cleanParamIdent bodyIdent existing
+        let identifier = if existing |> Seq.exists (fun parameter -> parameter.parameterIdent = identifier) then identifier + "AdditionalFields" else identifier
+        Some (fixedParameters @ [{
+            multipartEncoding = Some contentType
+            parameterName = bodyIdent
+            parameterIdent = identifier
+            required = required && fixedParameters.IsEmpty
+            parameterType = SynType.List (SynType.Create (if binaryArray then "MultipartFileField" else "MultipartTextField"))
+            docs = if String.IsNullOrWhiteSpace item.Description then "" else item.Description
+            properties = []
+            location = if binaryArray then "multipartFileFields" else "multipartFields"
+            style = "formfield"
+        }])
+
 let private processOperationRequestBody
     (config: CodegenConfig)
     (operation: OpenApiOperation)
@@ -399,7 +449,10 @@ let private processOperationRequestBody
             }]
 
         elif content.ContainsKey "multipart/form-data" then
-            multipartParameters config content.["multipart/form-data"] parameters
+            let media = content.["multipart/form-data"]
+            match tryDynamicMultipartParameters config media operation.RequestBody.Required bodyIdent parameters with
+            | Some dynamic -> dynamic
+            | None -> multipartParameters config media parameters
 
         elif content.ContainsKey "application/x-www-form-urlencoded" then
             let schema = content.["application/x-www-form-urlencoded"].Schema

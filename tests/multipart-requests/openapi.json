@@ -155,6 +155,70 @@
           }
         }
       }
+    },
+    "/dynamic": {
+      "post": {
+        "operationId": "Dynamic",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "description": "Already encoded text; retain the exact supplied string."
+                }
+              },
+              "encoding": {
+                "*": {
+                  "contentType": "*/*"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          }
+        }
+      }
+    },
+    "/mixed": {
+      "post": {
+        "operationId": "Mixed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "metadata": {
+                    "$ref": "#/components/schemas/NamedMetadata"
+                  },
+                  "optional": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "metadata",
+                  "files"
+                ],
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/BinaryFiles"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted"
+          }
+        }
+      }
     }
   },
   "components": {
