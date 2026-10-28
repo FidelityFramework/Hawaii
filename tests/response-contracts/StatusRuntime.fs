@@ -42,6 +42,16 @@ let encode value = Hawaii.StatusRegression.Http.Serializer.serialize value
 
 [<EntryPoint>]
 let main _ =
+    json 200 "{\"errors\":[{\"code\":7,\"message\":\"detail\"}],\"message\":\"failure\",\"result\":{\"name\":\"typed\"}}" (fun client ->
+        match result (client.Envelope()) with
+        | Envelope.OK payload ->
+            check "allOf response keeps inherited typed errors" (payload.errors.Length = 1 && payload.errors[0].code = 7)
+            check "allOf response keeps its named result" (payload.result.name = "typed")
+        )
+    let missingRequiredString =
+        try decode<FailureEnvelope> "{\"errors\":[]}" |> ignore; false
+        with :? System.Text.Json.JsonException -> true
+    check "required string fields cannot silently deserialize as null" missingRequiredString
     json 200 "{\"message\":\"ok\"}" (fun client ->
         match result (client.Dispatch()) with
         | Dispatch.OK payload -> check "200 JSON body" (payload.message = "ok")

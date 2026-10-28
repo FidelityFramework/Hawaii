@@ -18,7 +18,7 @@ module Serializer =
             .WithSkippableOptionFields()
             .WithAllowOverride(true)
     let options =
-        let o = JsonSerializerOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)
+        let o = JsonSerializerOptions()
         // Options-level converters precede type attributes. Leave explicitly
         // attributed schema converters to System.Text.Json's normal resolution.
         let fallback = JsonFSharpConverter(fsharpOptions)
