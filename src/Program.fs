@@ -546,8 +546,8 @@ let (|IntEnum|_|) (typeName: string) (schema: IOpenApiSchema) =
     else
         None
 
-/// An allOf reference with only annotations and an identical type assertion
-/// has the same structural representation as its named target.
+/// <summary>Resolves an allOf alias whose siblings retain its named target's structural representation.</summary>
+/// <remarks>Scalar and collection validation constraints retain the target's F# type.</remarks>
 let tryAllOfAlias (schema: IOpenApiSchema) =
     if isNull (box schema) || isSchemaReference schema then None
     else
@@ -564,6 +564,9 @@ let tryAllOfAlias (schema: IOpenApiSchema) =
                     match property.Name with
                     | "description" | "title" | "example" | "examples" | "readOnly" | "writeOnly" | "deprecated" | "default"
                     | "x-hawaii-source-pointer" | "x-hawaii-original-title" -> true
+                    | "minLength" | "maxLength" | "pattern" | "minimum" | "maximum"
+                    | "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf"
+                    | "minItems" | "maxItems" | "uniqueItems" | "minProperties" | "maxProperties" -> true
                     | "allOf" -> allowAllOf
                     | "type" -> schemaTypeFlags part = schemaTypeFlags target
                     | _ -> false)
@@ -1480,6 +1483,15 @@ let createResponseType (operation: OpenApiOperation) (path: string) (operationTy
     visitedTypes.Add operationName
     // hack: add it to the operation and retrieve it later
     operation.Extensions.Add("ResponseTypeName", stringExtension operationName)
+    let isInlineRecordBody (schema: IOpenApiSchema) =
+        let seen = HashSet<IOpenApiSchema>(HashIdentity.Reference)
+        let rec hasFields (current: IOpenApiSchema) =
+            isNotNull (box current) && seen.Add current
+            && ((isNotNull current.Properties && current.Properties.Count > 0)
+                || (safeSeq current.AllOf |> Seq.exists hasFields))
+        isNotNull (box schema) && not (isSchemaReference schema)
+        && (tryAllOfAlias schema).IsNone && hasFields schema
+
     let rec getFieldType (schema: IOpenApiSchema) (status: string) (wrapODataResponse: bool) =
         match schemaTypeName schema with
         | _ when isSchemaReference schema || (tryAllOfAlias schema).IsSome ->
@@ -1554,7 +1566,7 @@ let createResponseType (operation: OpenApiOperation) (path: string) (operationTy
             let valueType = getFieldType schema.AdditionalProperties status false
             let keyType = SynType.String()
             SynType.Map(keyType, valueType)
-        | "object" ->
+        | _ when schemaTypeName schema = "object" || isInlineRecordBody schema ->
             let recordName = $"{operationName}_{status}"
             visitedTypes.Add recordName
             let factory = FactoryFunction.None
@@ -1572,15 +1584,6 @@ let createResponseType (operation: OpenApiOperation) (path: string) (operationTy
             let name = if invalidTitle target.Title then sanitizeTypeName (schemaReferenceId target) else sanitizeTypeName target.Title
             operation.Extensions.Add("RequestTypePayload", stringExtension name)
         | None -> ()
-
-    let isInlineRecordBody (schema: IOpenApiSchema) =
-        let seen = HashSet<IOpenApiSchema>(HashIdentity.Reference)
-        let rec hasFields (current: IOpenApiSchema) =
-            isNotNull (box current) && seen.Add current
-            && ((isNotNull current.Properties && current.Properties.Count > 0)
-                || (safeSeq current.AllOf |> Seq.exists hasFields))
-        isNotNull (box schema) && not (isSchemaReference schema)
-        && (tryAllOfAlias schema).IsNone && hasFields schema
 
     let hasLoosePayloadRequestBody =
         isNotNull operation.RequestBody

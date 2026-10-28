@@ -5,6 +5,22 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/envelope": {
+      "get": {
+        "operationId": "envelope",
+        "responses": {
+          "200": {
+            "description": "Object envelope without an outer type",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/FailureEnvelope" },
+                { "properties": { "result": { "$ref": "#/components/schemas/EnvelopeResult" } }, "required": ["result"] }
+              ]
+            } } }
+          }
+        }
+      }
+    },
     "/dispatch": {
       "get": {
         "operationId": "dispatch",
@@ -630,6 +646,20 @@
   },
   "components": {
     "schemas": {
+      "EnvelopeResult": {
+        "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"]
+      },
+      "FailureMessages": {
+        "type": "array", "items": {
+          "type": "object", "properties": { "code": { "type": "integer" }, "message": { "type": "string" } }, "required": ["code", "message"]
+        }
+      },
+      "FailureEnvelope": {
+        "type": "object", "properties": {
+          "errors": { "allOf": [{ "$ref": "#/components/schemas/FailureMessages" }], "minLength": 1 },
+          "message": { "type": "string" }
+        }, "required": ["errors", "message"]
+      },
       "Tree": {
         "type": "array",
         "items": {
